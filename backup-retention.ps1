@@ -8,6 +8,7 @@ param (
     [string[]]$gitRepoUrls,
     [int]$retentionDays,
     [int]$backupExpiredYears,
+    [string]$commandAbsPath = "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe",
     [string]$backupRootDir = "C:\backups"
 )
 
@@ -82,20 +83,20 @@ foreach ($gitRepoUrl in $gitRepoUrls) {
 # Clean up old backup files
 clean_up_files
 
-# Create task scheduler for backup-retention service start
+# Set the name of the scheduler
 $schedulerName = "BackupRetentionTask"
-$schedulerDescription = "Runs the backup retention service"
-$schedulerAction = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument "-ExecutionPolicy Bypass -File `"$PSScriptRoot\backup-retention.ps1`" -gitRepoUrls $gitRepoUrls -retentionDays $retentionDays -backupExpiredYears $backupExpiredYears -backupRootDir $backupRootDir"
-$schedulerTrigger = New-ScheduledTaskTrigger -Daily -DaysInterval $retentionDays -At "00:00"
-$schedulerSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-$schedulerPrincipal = New-ScheduledTaskPrincipal -UserID "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$schedulerOptions = New-ScheduledTask -Action $schedulerAction -Trigger $schedulerTrigger -Settings $schedulerSettings -Principal $schedulerPrincipal
 
 # Check if scheduler already exists
 if (Get-ScheduledTask -TaskName $schedulerName -ErrorAction SilentlyContinue) {
     Write-Output "Task Scheduler '$schedulerName' already exists. Skipping creation."
 } else {
     # Create the scheduler
-    Register-ScheduledTask -TaskName $schedulerName -Action $schedulerAction -Trigger $schedulerTrigger -Settings $schedulerSettings -Principal $schedulerPrincipal
+    $schedulerAction = New-ScheduledTaskAction -Execute $commandAbsPath -Argument "-ExecutionPolicy Bypass -File `"$PSScriptRoot\backup-retention.ps1`" -gitRepoUrls $gitRepoUrls -retentionDays $retentionDays -backupExpiredYears $backupExpiredYears -backupRootDir $backupRootDir"
+    $schedulerTrigger = New-ScheduledTaskTrigger -Daily -DaysInterval $retentionDays -At "00:00"
+    $schedulerSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    $schedulerPrincipal = New-ScheduledTaskPrincipal -UserID "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $schedulerTask = New-ScheduledTask -Action $schedulerAction -Trigger $schedulerTrigger -Settings $schedulerSettings -Principal $schedulerPrincipal
+
+    Register-ScheduledTask -TaskName $schedulerName -InputObject $schedulerTask -Force
     Write-Output "Task Scheduler '$schedulerName' created successfully."
 }
