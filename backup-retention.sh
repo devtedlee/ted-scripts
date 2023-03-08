@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# !! this code is not tested, please use this before code fix !!
 # execute example:
 # chmod +x backup-retention.sh
 # ./backup-retention.sh --retentionDays 7 --backupExpiredYears 2 --backupRootDir /backups --gitRepoUrls https://github.com/username1/repo1 https://github.com/username2/repo2
