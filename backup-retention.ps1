@@ -1,14 +1,17 @@
 # execute example
 # Execute this code at Admin PowerShell
 # Set-ExecutionPolicy RemoteSigned
-# .\backup-retention.ps1 -gitRepoUrls @("https://github.com/myusername/myrepo.git", "https://github.com/myusername/myotherrepo.git") -retentionDays 30 -backupExpiredYears 1 -backupRootDir "C:\backups"
+# .\backup-retention.ps1 -gitRepoUrls @("https://github.com/myusername/myrepo.git", "https://github.com/myusername/myotherrepo.git") -retentionDays 30 -backupExpiredYears 1 -awsBucketName {bucketName} -awsAccessKey {accessKey} -awsSecretKey {secretKey} -backupRootDir "C:\backups"
 
 # Parse command line arguments
 param (
     [string[]]$gitRepoUrls,
     [int]$retentionDays,
     [int]$backupExpiredYears,
-    [string]$commandAbsPath = "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe",
+    [string]$awsBucketName, # optional
+    [string]$awsAccessKey, # optional
+    [string]$awsSecretKey, # optional
+    [string]$commandAbsPath = "powershell.exe",
     [string]$backupRootDir = "C:\backups"
 )
 
@@ -28,7 +31,6 @@ if (!$backupExpiredYears) {
     exit 1
 }
 
-
 function create_directory_if_not_exists {
     param (
         [string]$directoryName
@@ -40,28 +42,73 @@ function create_directory_if_not_exists {
     }
 }
 
-# Create backups root directory if it doesn't exist
-create_directory_if_not_exists($backupRootDir)
-
-# Move to backup directory
-Set-Location $backupRootDir -ErrorAction Stop
-
 # Function to clean up old backup files
 function clean_up_files {
+    param (
+        [string]$rootDir,
+        [int]$expiredYears
+    )
 
     # Move to backup directory
-    Set-Location $backupRootDir -ErrorAction Stop
+    Set-Location $rootDir -ErrorAction Stop
 
     # Create a new directory with today's date
-    $backupDir = Get-Date -Format "yyyy-MM-dd"
-    New-Item $backupDir -ItemType Directory | Out-Null
+    $backupFolder = Get-Date -Format "yyyy-MM-dd"
+    New-Item $backupFolder -ItemType Directory | Out-Null
 
     # Move all zip files to the new directory
-    Move-Item *.zip $backupDir
+    Move-Item *.zip $backupFolder
 
     # Remove directories older than backupExpiredYears
-    Get-ChildItem -Path . -Directory -Filter "20*" | Where-Object {$_.LastWriteTime -lt (Get-Date).AddYears(-$backupExpiredYears)} | Remove-Item -Recurse -Force
+    Get-ChildItem -Path . -Directory -Filter "20*" | Where-Object {$_.LastWriteTime -lt (Get-Date).AddYears(-$expiredYears)} | Remove-Item -Recurse -Force
 }
+
+function upload_files_to_s3 {
+    param (
+        [string]$rootDir,
+        [string]$bucketName,
+        [string]$accessKey,
+        [string]$secretKey
+    )
+
+    # Check if the AWSPowerShell module is installed
+    if (Get-Module -ListAvailable -Name AWSPowerShell) {
+        Write-Output "AWS Tools for PowerShell is already installed."
+    } else {
+        # Install the AWSPowerShell module
+        Install-Module -Name AWSPowerShell -Scope CurrentUser -Force
+        Write-Output "AWS Tools for PowerShell installed successfully."
+    }
+
+    # Import the AWSPowerShell module
+    Import-Module AWSPowerShell
+
+    # Set the AWS credentials
+    Set-AWSCredentials -AccessKey $accessKey -SecretKey $secretKey
+
+    # Set the AWS region
+    Set-DefaultAWSRegion -Region "ap-northeast-2"
+
+    # Move to backup directory
+    Set-Location $rootDir -ErrorAction Stop
+
+    # Get the name of the backup directory
+    $backupDir = Get-Date -Format "yyyy-MM-dd"
+
+    # Upload the directory and its contents to S3
+    $objects = Get-ChildItem -Path $backupDir -Recurse
+    foreach ($object in $objects) {
+        Write-S3Object -BucketName $bucketName -Key $object.FullName.Replace($rootDir, "").TrimStart("\") -File $object.FullName  -ErrorAction Stop
+    }
+
+    Write-Output "Upload completed successfully."
+}
+
+# Create backups root directory if it doesn't exist
+create_directory_if_not_exists $backupRootDir
+
+# Move to backup root directory
+cd $backupRootDir
 
 # Clone each Git repository URL and create a backup archive
 foreach ($gitRepoUrl in $gitRepoUrls) {
@@ -80,8 +127,17 @@ foreach ($gitRepoUrl in $gitRepoUrls) {
     Remove-Item -Recurse -Force $repoName
 }
 
+# Move to backup directory
+Set-Location $backupRootDir -ErrorAction Stop
+
 # Clean up old backup files
-clean_up_files
+clean_up_files $backupRootDir $backupExpiredYears
+
+# If AWS credentials are provided, upload the backup files to S3
+if ($awsBucketName -and $awsAccessKey -and $awsSecretKey) {
+    Write-Output "AWS credentials provided."
+    upload_files_to_s3 $backupRootDir $awsBucketName $awsAccessKey $awsSecretKey
+}
 
 # Set the name of the scheduler
 $schedulerName = "BackupRetentionTask"
@@ -90,8 +146,15 @@ $schedulerName = "BackupRetentionTask"
 if (Get-ScheduledTask -TaskName $schedulerName -ErrorAction SilentlyContinue) {
     Write-Output "Task Scheduler '$schedulerName' already exists. Skipping creation."
 } else {
-    # Create the scheduler
-    $schedulerAction = New-ScheduledTaskAction -Execute $commandAbsPath -Argument "-ExecutionPolicy Bypass -File `"$PSScriptRoot\backup-retention.ps1`" -gitRepoUrls $gitRepoUrls -retentionDays $retentionDays -backupExpiredYears $backupExpiredYears -backupRootDir $backupRootDir"
+    $gitRepoUrlsArg = @($gitRepoUrls)
+    $gitRepoUrlsArg = $gitRepoUrlsArg -join "', '"
+    $schedulerActionArguments = "-ExecutionPolicy Bypass -Command `"& $PSScriptRoot\backup-retention.ps1 -gitRepoUrls @('$gitRepoUrlsArg') -retentionDays $retentionDays -backupExpiredYears $backupExpiredYears -backupRootDir '$backupRootDir'"
+
+    if ($awsBucketName -and $awsAccessKey -and $awsSecretKey) {
+        $schedulerActionArguments += " -awsBucketName '$awsBucketName' -awsAccessKey '$awsAccessKey' -awsSecretKey '$awsSecretKey'"
+    }
+
+    $schedulerAction = New-ScheduledTaskAction -Execute $commandAbsPath -Argument $schedulerActionArguments
     $schedulerTrigger = New-ScheduledTaskTrigger -Daily -DaysInterval $retentionDays -At "00:00"
     $schedulerSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     $schedulerPrincipal = New-ScheduledTaskPrincipal -UserID "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
