@@ -111,14 +111,14 @@ create_directory_if_not_exists $backupRootDir
 cd $backupRootDir
 
 # Clone each Git repository URL and create a backup archive
-foreach ($gitRepoUrl in $gitRepoUrls) {
+foreach ($gitRepoUrl in $gitRepoUrls) {	
     # Clone the repository
-    git clone --depth 1 $gitRepoUrl
+    git.exe clone -v --depth 1 $gitRepoUrl
 
     # Get the name of the repository
     $repoName = ($gitRepoUrl -split "/" | Select-Object -Last 1).Replace(".git", "")
 
-    create_directory_if_not_exists("./$repoName")
+    create_directory_if_not_exists "./$repoName"
 
     # Zip the repository folder
     Compress-Archive -Path $repoName -CompressionLevel Optimal -DestinationPath "$repoName.zip"
@@ -162,4 +162,9 @@ if (Get-ScheduledTask -TaskName $schedulerName -ErrorAction SilentlyContinue) {
 
     Register-ScheduledTask -TaskName $schedulerName -InputObject $schedulerTask -Force
     Write-Output "Task Scheduler '$schedulerName' created successfully."
+	
+	# set git command at path for SYSTEM account
+	$currentPath = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name PATH).Path
+	$newPath = $currentPath + ";C:\new\path\to\add"
+	Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name PATH -Value $newPath
 }
