@@ -165,6 +165,6 @@ if (Get-ScheduledTask -TaskName $schedulerName -ErrorAction SilentlyContinue) {
 	
 	# set git command at path for SYSTEM account
 	$currentPath = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name PATH).Path
-	$newPath = $currentPath + ";C:\new\path\to\add"
+	$newPath = $currentPath + ";C:\Program Files\Git\bin"
 	Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name PATH -Value $newPath
 }
